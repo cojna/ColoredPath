@@ -112,9 +112,12 @@ impl ColoredPath {
         for i in 0..H {
             if self.hand[i] == action.color {
                 self.hand[i] = self.bottle_queue.pop_front().unwrap();
-                break;
+                return;
             }
         }
+        unreachable!("faild to throw: color = {}, hand = {:?}",
+                     action.color,
+                     self.hand);
     }
 
     pub fn next_state(&self, action: Action) -> State {
