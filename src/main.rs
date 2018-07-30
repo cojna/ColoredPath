@@ -39,7 +39,7 @@ fn solve<R: std::io::BufRead, W: std::io::Write>(reader: &mut R, writer: &mut W)
     let mut cp = ColoredPath::new(stripe, bottle);
 
     while !cp.is_end() {
-        let actions = one_step_greedy(&cp);
+        let actions = greedy(&cp, min(5, cp.bottle_queue.len()));
         for action in actions {
             if !cp.is_end() {
                 cp.throw(action);
@@ -55,31 +55,33 @@ fn solve<R: std::io::BufRead, W: std::io::Write>(reader: &mut R, writer: &mut W)
     eprintln!("{}", cp.state.score());
 }
 
-pub fn one_step_greedy(cp: &ColoredPath) -> Vec<Action> {
-    let mut leftest_id = 0;
-    for i in 1..U {
-        if cp.state.position[leftest_id] > cp.state.position[i] {
-            leftest_id = i;
+pub fn greedy(cp: &ColoredPath, step_size: usize) -> Vec<Action> {
+    let mut chamereons: Vec<usize> = (0..U).collect();
+    chamereons.sort_by_key(|&i| cp.state.position[i]);
+    chamereons.truncate(step_size);
+    let mut best_score = 0;
+    let mut best_actions = vec![];
+    loop {
+        let (st, actions) = cp.simulate(&chamereons);
+        let mut score = 0;
+        for &c in &chamereons {
+            score += st.position[c];
+        }
+        if score > best_score {
+            best_score = score;
+            best_actions = actions;
+        }
+        if !chamereons.next_permutation() {
+            break;
         }
     }
-
-    let mut max_next_pos = 0;
-    let mut max_next_color = 0;
-    for i in 0..H {
-        let h = cp.hand[i];
-        let next = cp.next_state(Action::new(leftest_id, h));
-        if max_next_pos < next.position[leftest_id] {
-            max_next_pos = next.position[leftest_id];
-            max_next_color = h;
-        }
-    }
-    vec![Action::new(leftest_id, max_next_color)]
+    best_actions
 }
 
 pub struct ColoredPath {
     pub state: State,
     pub hand: Vec<Color>,
-    bottle_queue: VecDeque<Color>,
+    pub bottle_queue: VecDeque<Color>,
     stripe: Vec<usize>,
     next: Vec<[usize; C]>,
     pub history: Vec<Action>,
@@ -128,6 +130,32 @@ impl ColoredPath {
         let mut position: [usize; U] = self.state.position.clone();
         position[action.target] = pos;
         State { position: position }
+    }
+
+    pub fn simulate(&self, chamereons: &Vec<Chamereon>) -> (State, Vec<Action>) {
+        let n = chamereons.len();
+        let mut hand = self.hand.clone();
+        let mut queue: VecDeque<Color> = self.bottle_queue.iter().map(|&x| x).take(n + 1).collect();
+        let mut position = self.state.position.clone();
+        let mut actions = Vec::with_capacity(n);
+        for &target in chamereons {
+            let mut max_pos = 0;
+            let mut max_id = 0;
+            for i in 0..H {
+                let mut pos = position[target];
+                while position.contains(&pos) {
+                    pos += self.next[pos % N][hand[i]];
+                }
+                if max_pos < pos {
+                    max_pos = pos;
+                    max_id = i;
+                }
+            }
+            position[target] = max_pos;
+            actions.push(Action::new(target, hand[max_id]));
+            hand[max_id] = queue.pop_front().unwrap();
+        }
+        (State { position: position }, actions)
     }
 
     fn build_next(vec: &Vec<usize>) -> Vec<[usize; C]> {
@@ -191,6 +219,33 @@ impl std::fmt::Display for Action {
                "{} {}",
                self.target,
                (self.color as u8 + 'A' as u8) as char)
+    }
+}
+
+pub trait Permutation {
+    fn next_permutation(&mut self) -> bool;
+}
+
+impl<T: Ord> Permutation for Vec<T> {
+    fn next_permutation(&mut self) -> bool {
+        let n = self.len();
+        let mut k = NOTHING;
+        let mut l = NOTHING;
+        for i in 1..n {
+            if self[i - 1] < self[i] {
+                k = i - 1;
+                l = i;
+            } else if k != NOTHING && self[k] < self[i] {
+                l = i;
+            }
+        }
+        if k == NOTHING {
+            false
+        } else {
+            self.swap(k, l);
+            self[k + 1..n].reverse();
+            true
+        }
     }
 }
 
