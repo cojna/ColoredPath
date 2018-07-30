@@ -105,7 +105,7 @@ impl ColoredPath {
     pub fn throw(&mut self, action: Action) {
         let mut pos = self.state.position[action.target];
         while self.state.occupied(pos) {
-            pos += self.next[pos][action.color];
+            pos += self.next[pos % N][action.color];
         }
         self.state.position[action.target] = pos;
         self.history.push(action);
@@ -120,7 +120,7 @@ impl ColoredPath {
     pub fn next_state(&self, action: Action) -> State {
         let mut pos = self.state.position[action.target];
         while self.state.occupied(pos) {
-            pos += self.next[pos][action.color];
+            pos += self.next[pos % N][action.color];
         }
         let mut position: [usize; U] = self.state.position.clone();
         position[action.target] = pos;
