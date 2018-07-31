@@ -1,5 +1,5 @@
 [package]
-name = "main"
+name = "colored-path"
 version = "0.1.0"
 authors = ["cojna <cojna@users.noreply.github.com>"]
 publish = false
