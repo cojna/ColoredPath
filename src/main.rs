@@ -64,10 +64,7 @@ pub fn greedy(cp: &ColoredPath, step_size: usize) -> Vec<Action> {
     let mut best_actions = vec![];
     loop {
         let (st, actions) = cp.simulate(&chamereons);
-        let mut score = 0;
-        for &c in &chamereons {
-            score += st.position[c];
-        }
+        let score = st.position.iter().sum();
         if score > best_score {
             best_score = score;
             best_actions = actions;
