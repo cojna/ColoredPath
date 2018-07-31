@@ -42,11 +42,13 @@ fn solve<R: std::io::BufRead, W: std::io::Write>(reader: &mut R, writer: &mut W)
     let mut best_score = 0;
     let mut best_actions = vec![];
     let mut parameters = vec![];
-    for i in 0..10 {
-        parameters.push((5, i + 2));
+    let probs = vec![2, 4, 8, 16, 32, 64];
+    for &p in &probs {
+        parameters.push((5, p));
+        parameters.push((5, p + 1));
     }
-    for i in 0..5 {
-        parameters.push((6, 2 * i + 2));
+    for &p in &probs {
+        parameters.push((6, p));
     }
     for (step, prob) in parameters {
 
@@ -61,12 +63,12 @@ fn solve<R: std::io::BufRead, W: std::io::Write>(reader: &mut R, writer: &mut W)
             }
         }
         let score = cp.state.score();
+        eprintln!("score: {}, step: {}, prob: {}", score, step, prob);
         if best_score < score {
             best_score = score;
             best_actions = cp.history.clone();
         }
         cp.init_by_bottle(&bottle);
-        eprintln!("score: {}, step: {}, prob: {}", best_score, step, prob);
     }
 
     for h in best_actions {
@@ -83,7 +85,7 @@ pub fn greedy(cp: &ColoredPath, step_size: usize, prob: usize, rng: &mut Random)
     let mut best_score = 0;
     let mut best_actions = vec![];
     loop {
-        let (st, actions) = cp.simulate(&chamereons);
+        let (st, actions) = cp.simulate(&chamereons, prob, rng);
         let score = st.position.iter().sum();
         if score > best_score && rng.usize(..prob) != 0 {
             best_score = score;
@@ -157,7 +159,11 @@ impl ColoredPath {
         State { position: position }
     }
 
-    pub fn simulate(&self, chamereons: &Vec<Chamereon>) -> (State, Vec<Action>) {
+    pub fn simulate(&self,
+                    chamereons: &Vec<Chamereon>,
+                    prob: usize,
+                    rng: &mut Random)
+                    -> (State, Vec<Action>) {
         let n = chamereons.len();
         let mut hand = self.hand.clone();
         let mut queue: VecDeque<Color> = self.bottle_queue.iter().map(|&x| x).take(n + 1).collect();
@@ -171,7 +177,7 @@ impl ColoredPath {
                 while position.contains(&pos) {
                     pos += self.next[pos % N][hand[i]];
                 }
-                if max_pos < pos {
+                if max_pos < pos && rng.usize(..prob) != 0 {
                     max_pos = pos;
                     max_id = i;
                 }
