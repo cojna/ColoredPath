@@ -59,6 +59,7 @@ pub fn greedy(cp: &ColoredPath, step_size: usize) -> Vec<Action> {
     let mut chamereons: Vec<usize> = (0..U).collect();
     chamereons.sort_by_key(|&i| cp.state.position[i]);
     chamereons.truncate(step_size);
+    chamereons.sort();
     let mut best_score = 0;
     let mut best_actions = vec![];
     loop {
