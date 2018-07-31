@@ -35,27 +35,47 @@ fn solve<R: std::io::BufRead, W: std::io::Write>(reader: &mut R, writer: &mut W)
     buf.clear();
     reader.read_line(&mut buf).unwrap();
     let bottle: Vec<usize> = buf.trim_right().chars().map(|c| c as usize - 'A' as usize).collect();
+    let mut cp = ColoredPath::new(stripe, &bottle);
 
-    let mut cp = ColoredPath::new(stripe, bottle);
+    let mut rng = Random::new();
 
-    while !cp.is_end() {
-        let actions = greedy(&cp, min(6, cp.bottle_queue.len()));
-        for action in actions {
-            if !cp.is_end() {
-                cp.throw(action);
-            } else {
-                break;
+    let mut best_score = 0;
+    let mut best_actions = vec![];
+    let mut parameters = vec![];
+    for i in 0..10 {
+        parameters.push((5, i + 2));
+    }
+    for i in 0..5 {
+        parameters.push((6, 2 * i + 2));
+    }
+    for (step, prob) in parameters {
+
+        while !cp.is_end() {
+            let actions = greedy(&cp, min(step, cp.bottle_queue.len()), prob, &mut rng);
+            for action in actions {
+                if !cp.is_end() {
+                    cp.throw(action);
+                } else {
+                    break;
+                }
             }
         }
+        let score = cp.state.score();
+        if best_score < score {
+            best_score = score;
+            best_actions = cp.history.clone();
+        }
+        cp.init_by_bottle(&bottle);
+        eprintln!("score: {}, step: {}, prob: {}", best_score, step, prob);
     }
 
-    for h in cp.history {
+    for h in best_actions {
         writer.write_fmt(format_args!("{}\n", h)).unwrap();
     }
-    eprintln!("{}", cp.state.score());
+    eprintln!("{}", best_score);
 }
 
-pub fn greedy(cp: &ColoredPath, step_size: usize) -> Vec<Action> {
+pub fn greedy(cp: &ColoredPath, step_size: usize, prob: usize, rng: &mut Random) -> Vec<Action> {
     let mut chamereons: Vec<usize> = (0..U).collect();
     chamereons.sort_by_key(|&i| cp.state.position[i]);
     chamereons.truncate(step_size);
@@ -65,7 +85,7 @@ pub fn greedy(cp: &ColoredPath, step_size: usize) -> Vec<Action> {
     loop {
         let (st, actions) = cp.simulate(&chamereons);
         let score = st.position.iter().sum();
-        if score > best_score {
+        if score > best_score && rng.usize(..prob) != 0 {
             best_score = score;
             best_actions = actions;
         }
@@ -86,7 +106,7 @@ pub struct ColoredPath {
 }
 
 impl ColoredPath {
-    pub fn new(stripe: Vec<Color>, bottle: Vec<Color>) -> ColoredPath {
+    pub fn new(stripe: Vec<Color>, bottle: &Vec<Color>) -> ColoredPath {
         let next = Self::build_next(&stripe);
         ColoredPath {
             state: State::new(),
@@ -96,6 +116,13 @@ impl ColoredPath {
             next: next,
             history: vec![],
         }
+    }
+
+    pub fn init_by_bottle(&mut self, bottle: &Vec<Color>) {
+        self.state = State::new();
+        self.hand = bottle[0..H].to_vec();
+        self.bottle_queue = VecDeque::from(bottle[H..].to_vec());
+        self.history.clear();
     }
 
     pub fn is_end(&self) -> bool {
@@ -156,7 +183,7 @@ impl ColoredPath {
         (State { position: position }, actions)
     }
 
-    fn build_next(vec: &Vec<usize>) -> Vec<[usize; C]> {
+    pub fn build_next(vec: &Vec<usize>) -> Vec<[usize; C]> {
         let n = vec.len();
         let mut next = vec![[0x3f3f3f3f;C];2 * n];
         for i in (1..2 * n).rev() {
@@ -244,6 +271,126 @@ impl<T: Ord> Permutation for Vec<T> {
             self[k + 1..n].reverse();
             true
         }
+    }
+}
+
+// xoroshiro128**
+// http://vigna.di.unimi.it/xorshift/
+pub struct Random {
+    state0: u64,
+    state1: u64,
+}
+
+impl Random {
+    pub fn new() -> Random {
+        Self::from_seed(123456789)
+    }
+
+    pub fn from_seed(seed: u64) -> Random {
+        let mut sm = SplitMix64::new(seed);
+        Random {
+            state0: sm.next(),
+            state1: sm.next(),
+        }
+    }
+
+    fn next(&mut self) -> u64 {
+        let s0 = self.state0;
+        let mut s1 = self.state1;
+        let res = (((s0.wrapping_mul(5)) << 7) | ((s0.wrapping_mul(5)) >> 57)).wrapping_mul(9);
+        s1 ^= s0;
+        self.state0 = ((s0 << 24) | (s0 >> 40)) ^ s1 ^ (s1 << 16);
+        self.state1 = (s1 << 37) | (s1 >> 27);
+        res
+    }
+
+    pub fn usize<T: U64Normalizer<Output = usize>>(&mut self, normalizer: T) -> usize {
+        normalizer.normalize_u64(self.next())
+    }
+
+    pub fn f64(&mut self) -> f64 {
+        let x = 0x3ff << 52 | self.next() >> 12;
+        let f: f64 = unsafe { ::std::mem::transmute::<u64, f64>(x) };
+        f - 1.0
+    }
+
+    pub fn gauss(&mut self, mu: f64, sigma: f64) -> f64 {
+        let x = self.f64();
+        let y = self.f64();
+        let z = (-2.0 * x.ln()).sqrt() * (2.0 * ::std::f64::consts::PI * y).cos();
+        sigma * z + mu
+    }
+
+    pub fn shuffle<T>(&mut self, vec: &mut Vec<T>) {
+        for i in (0..vec.len()).rev() {
+            vec.swap(i, self.usize(i + 1));
+        }
+    }
+
+    pub fn choice<T: Clone>(&mut self, vec: &Vec<T>) -> T {
+        vec[self.usize(vec.len())].clone()
+    }
+
+    pub fn choices<T: Clone>(&mut self, vec: &Vec<T>, n: usize) -> Vec<T> {
+        (0..n).map(|_| self.choice(vec)).collect()
+    }
+}
+
+struct SplitMix64 {
+    state: u64,
+}
+
+impl SplitMix64 {
+    pub fn new(seed: u64) -> SplitMix64 {
+        SplitMix64 { state: seed }
+    }
+
+    pub fn next(&mut self) -> u64 {
+        let mut z = self.state.wrapping_add(0x9e3779b97f4a7c15);
+        self.state = z;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+        z ^ (z >> 31)
+    }
+}
+
+pub trait U64Normalizer {
+    type Output;
+    fn normalize_u64(&self, x: u64) -> Self::Output;
+}
+
+impl U64Normalizer for usize {
+    type Output = usize;
+    fn normalize_u64(&self, x: u64) -> usize {
+        x as usize % self
+    }
+}
+
+impl U64Normalizer for ::std::ops::Range<usize> {
+    type Output = usize;
+    fn normalize_u64(&self, x: u64) -> usize {
+        self.start + x as usize % (self.end - self.start)
+    }
+}
+
+impl U64Normalizer for ::std::ops::RangeTo<usize> {
+    type Output = usize;
+    fn normalize_u64(&self, x: u64) -> usize {
+        x as usize % self.end
+    }
+}
+
+impl U64Normalizer for ::std::ops::RangeFrom<usize> {
+    type Output = usize;
+    fn normalize_u64(&self, x: u64) -> usize {
+        self.start + x as usize % (::std::usize::MAX - self.start)
+    }
+}
+
+impl U64Normalizer for ::std::ops::RangeFull {
+    type Output = usize;
+    fn normalize_u64(&self, x: u64) -> usize {
+        x as usize
     }
 }
 
