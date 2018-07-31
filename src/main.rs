@@ -39,7 +39,7 @@ fn solve<R: std::io::BufRead, W: std::io::Write>(reader: &mut R, writer: &mut W)
     let mut cp = ColoredPath::new(stripe, bottle);
 
     while !cp.is_end() {
-        let actions = greedy(&cp, min(5, cp.bottle_queue.len()));
+        let actions = greedy(&cp, min(6, cp.bottle_queue.len()));
         for action in actions {
             if !cp.is_end() {
                 cp.throw(action);
