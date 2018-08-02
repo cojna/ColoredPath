@@ -16,6 +16,9 @@ macro_rules! debug{
     }
 }
 
+const BEAM_WIDTH: usize = 75;
+const PUSH_RATE: usize = 4;
+
 const N: usize = 100000;
 const S: usize = 10000;
 const C: usize = 10;
@@ -23,10 +26,13 @@ const H: usize = 10;
 const U: usize = 10;
 
 const NOTHING: usize = std::usize::MAX;
+
 type Chamereon = usize;
 type Color = usize;
+type Position = usize;
 
 fn solve<R: std::io::BufRead, W: std::io::Write>(reader: &mut R, writer: &mut W) {
+    let clock = Clock::new();
     let mut buf = String::new();
     reader.read_line(&mut buf).unwrap();
     buf.clear();
@@ -35,161 +41,125 @@ fn solve<R: std::io::BufRead, W: std::io::Write>(reader: &mut R, writer: &mut W)
     buf.clear();
     reader.read_line(&mut buf).unwrap();
     let bottle: Vec<usize> = buf.trim_right().chars().map(|c| c as usize - 'A' as usize).collect();
-    let mut cp = ColoredPath::new(stripe, &bottle);
+    let hand: Vec<Color> = bottle[0..H].to_vec();
+    let bottle: Vec<Color> = bottle[H..].to_vec();
+    let cp = ColoredPath::new(stripe, bottle);
 
-    let mut rng = Random::new();
+    let (final_state, history) = beam_search(&cp, State::new(&hand), BEAM_WIDTH);
 
-    let mut best_score = 0;
-    let mut best_actions = vec![];
-    let mut parameters = vec![];
-    let probs = vec![2, 4, 8, 16, 32, 64];
-    for &p in &probs {
-        parameters.push((5, p));
-        parameters.push((5, p + 1));
-    }
-    for &p in &probs {
-        parameters.push((6, p));
-    }
-    for (step, prob) in parameters {
+    assert_eq!(history.len(), S);
 
-        while !cp.is_end() {
-            let actions = greedy(&cp, min(step, cp.bottle_queue.len()), prob, &mut rng);
-            for action in actions {
-                if !cp.is_end() {
-                    cp.throw(action);
-                } else {
-                    break;
-                }
-            }
-        }
-        let score = cp.state.score();
-        eprintln!("score: {}, step: {}, prob: {}", score, step, prob);
-        if best_score < score {
-            best_score = score;
-            best_actions = cp.history.clone();
-        }
-        cp.init_by_bottle(&bottle);
-    }
-
-    for h in best_actions {
+    for h in history {
         writer.write_fmt(format_args!("{}\n", h)).unwrap();
     }
-    eprintln!("{}", best_score);
+
+    eprintln!("-----------------------------------------------------");
+    eprintln!("score: {}", cp.eval_state(final_state).score);
+    eprintln!("result: {}", final_state.result());
+    eprintln!("time: {} ms", clock.elapsed());
+    eprintln!("-----------------------------------------------------");
 }
 
-pub fn greedy(cp: &ColoredPath, step_size: usize, prob: usize, rng: &mut Random) -> Vec<Action> {
-    let mut chamereons: Vec<usize> = (0..U).collect();
-    chamereons.sort_by_key(|&i| cp.state.position[i]);
-    chamereons.truncate(step_size);
-    chamereons.sort();
-    let mut best_score = 0;
-    let mut best_actions = vec![];
-    loop {
-        let (st, actions) = cp.simulate(&chamereons, prob, rng);
-        let score = st.position.iter().sum();
-        if score > best_score && rng.usize(..prob) != 0 {
-            best_score = score;
-            best_actions = actions;
+pub fn beam_search(cp: &ColoredPath, state: State, width: usize) -> (State, Vec<Action>) {
+    let mut heap = MaxHeapTopK::new(width);
+    let mut dp: Vec<Vec<Step>> = vec![vec![];S+1];
+    dp[0] = vec![Step {
+                     state: state,
+                     action: Action::dummy(),
+                     prev_id: NOTHING,
+                 }];
+    for i in 1..S + 1 {
+        heap.clear();
+        for (j, &step) in dp[i - 1].iter().enumerate() {
+            for candidate in cp.next_all_states(step.state) {
+                heap.push((candidate, j));
+            }
         }
-        if !chamereons.next_permutation() {
-            break;
+        for (candidate, j) in heap.to_vec() {
+            dp[i].push(Step {
+                state: candidate.0.state,
+                action: candidate.1,
+                prev_id: j,
+            })
         }
     }
-    best_actions
+
+    let mut best_id = 0;
+    let mut best_result = 0;
+    for (i, &step) in dp[S].iter().enumerate() {
+        if best_result < step.state.result() {
+            best_id = i;
+            best_result = step.state.result();
+        }
+    }
+    let best_step = dp[S][best_id];
+
+    let mut history = vec![];
+    history.push(best_step.action);
+    let mut prev_id = best_step.prev_id;
+    for i in (1..S).rev() {
+        let step = dp[i][prev_id];
+        prev_id = step.prev_id;
+        history.push(step.action);
+    }
+    (best_step.state, history)
 }
 
 pub struct ColoredPath {
-    pub state: State,
-    pub hand: Vec<Color>,
-    pub bottle_queue: VecDeque<Color>,
-    stripe: Vec<usize>,
-    next: Vec<[usize; C]>,
-    pub history: Vec<Action>,
+    pub bottle: Vec<Color>,
+    pub stripe: Vec<Color>,
+    pub next: Vec<[Position; C]>,
 }
 
 impl ColoredPath {
-    pub fn new(stripe: Vec<Color>, bottle: &Vec<Color>) -> ColoredPath {
+    pub fn new(stripe: Vec<Color>, bottle: Vec<Color>) -> ColoredPath {
         let next = Self::build_next(&stripe);
         ColoredPath {
-            state: State::new(),
-            hand: bottle[0..H].to_vec(),
-            bottle_queue: VecDeque::from(bottle[H..].to_vec()),
+            bottle: bottle,
             stripe: stripe,
             next: next,
-            history: vec![],
         }
     }
 
-    pub fn init_by_bottle(&mut self, bottle: &Vec<Color>) {
-        self.state = State::new();
-        self.hand = bottle[0..H].to_vec();
-        self.bottle_queue = VecDeque::from(bottle[H..].to_vec());
-        self.history.clear();
-    }
-
-    pub fn is_end(&self) -> bool {
-        self.bottle_queue.is_empty()
-    }
-
-    pub fn throw(&mut self, action: Action) {
-        let mut pos = self.state.position[action.target];
-        while self.state.occupied(pos) {
-            pos += self.next[pos % N][action.color];
+    pub fn eval_state(&self, state: State) -> ScoredState {
+        let mut pos = state.position.clone();
+        pos.sort();
+        let mut score = 0.0;
+        for i in 0..U {
+            score += pos[i] as f64 * 0.925f64.powi(i as i32);
         }
-        self.state.position[action.target] = pos;
-        self.history.push(action);
-        for i in 0..H {
-            if self.hand[i] == action.color {
-                self.hand[i] = self.bottle_queue.pop_front().unwrap();
-                return;
+        ScoredState {
+            score: score,
+            state: state,
+        }
+    }
+
+    pub fn next_all_states(&self, state: State) -> Vec<(ScoredState, Action)> {
+        let mut res = Vec::new();
+        for (target, &position) in state.position.iter().enumerate() {
+            for (hand_id, &color) in state.hand.iter().enumerate() {
+                let mut pos = position + self.next[position][color];
+                while state.occupied(pos) {
+                    pos += self.next[pos][color];
+                }
+                let mut new_position = state.position.clone();
+                new_position[target] = pos;
+                let mut new_hand = state.hand.clone();
+                new_hand[hand_id] = self.bottle[state.time];
+                let next = State {
+                    time: state.time + 1,
+                    position: new_position,
+                    hand: new_hand,
+                };
+
+                let action = Action::new(target, color);
+                res.push((self.eval_state(next), action));
             }
         }
-        unreachable!("faild to throw: color = {}, hand = {:?}",
-                     action.color,
-                     self.hand);
+        res
     }
 
-    pub fn next_state(&self, action: Action) -> State {
-        let mut pos = self.state.position[action.target];
-        while self.state.occupied(pos) {
-            pos += self.next[pos % N][action.color];
-        }
-        let mut position: [usize; U] = self.state.position.clone();
-        position[action.target] = pos;
-        State { position: position }
-    }
-
-    pub fn simulate(&self,
-                    chamereons: &Vec<Chamereon>,
-                    prob: usize,
-                    rng: &mut Random)
-                    -> (State, Vec<Action>) {
-        let n = chamereons.len();
-        let mut hand = self.hand.clone();
-        let mut queue: VecDeque<Color> = self.bottle_queue.iter().map(|&x| x).take(n + 1).collect();
-        let mut position = self.state.position.clone();
-        let mut actions = Vec::with_capacity(n);
-        for &target in chamereons {
-            let mut max_pos = 0;
-            let mut max_id = 0;
-            for i in 0..H {
-                let mut pos = position[target];
-                while position.contains(&pos) {
-                    pos += self.next[pos % N][hand[i]];
-                }
-                if max_pos < pos && rng.usize(..prob) != 0 {
-                    max_pos = pos;
-                    max_id = i;
-                }
-            }
-            position[target] = max_pos;
-            actions.push(Action::new(target, hand[max_id]));
-            hand[max_id] = queue.pop_front().unwrap();
-        }
-        (State { position: position }, actions)
-    }
-
-    pub fn build_next(vec: &Vec<usize>) -> Vec<[usize; C]> {
+    fn build_next(vec: &Vec<usize>) -> Vec<[usize; C]> {
         let n = vec.len();
         let mut next = vec![[0x3f3f3f3f;C];2 * n];
         for i in (1..2 * n).rev() {
@@ -206,40 +176,76 @@ impl ColoredPath {
     }
 }
 
-#[derive(Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub struct State {
-    pub position: [usize; U],
+    pub time: usize,
+    pub position: [Position; U],
+    pub hand: [Color; H],
 }
 
 impl State {
-    pub fn new() -> State {
+    pub fn new(hand: &Vec<Color>) -> State {
         let mut pos = [0; U];
+        let mut hs = [0; H];
         for i in 0..U {
             pos[i] = i;
         }
-        State { position: pos }
+        for i in 0..H {
+            hs[i] = hand[i];
+        }
+        State {
+            time: 0,
+            position: pos,
+            hand: hs,
+        }
     }
 
     pub fn occupied(&self, pos: usize) -> bool {
         self.position.contains(&pos)
     }
 
-    pub fn score(&self) -> usize {
+    pub fn result(&self) -> usize {
         *self.position.iter().min().unwrap()
     }
 }
 
-#[derive(Debug,Clone,Copy)]
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub struct ScoredState {
+    pub score: f64,
+    pub state: State,
+}
+
+impl Eq for ScoredState {}
+
+impl Ord for ScoredState {
+    fn cmp(&self, other: &ScoredState) -> Ordering {
+        self.score.partial_cmp(&other.score).unwrap()
+    }
+}
+
+impl PartialOrd for ScoredState {
+    fn partial_cmp(&self, other: &ScoredState) -> Option<Ordering> {
+        self.score.partial_cmp(&other.score)
+    }
+}
+
+#[derive(Eq,PartialEq, Ord, PartialOrd,Debug,Clone,Copy)]
 pub struct Action {
     target: Chamereon,
     color: Color,
 }
 
 impl Action {
-    fn new(target: Chamereon, color: Color) -> Action {
+    pub fn new(target: Chamereon, color: Color) -> Action {
         Action {
             target: target,
             color: color,
+        }
+    }
+    pub fn dummy() -> Action {
+        Action {
+            target: NOTHING,
+            color: NOTHING,
         }
     }
 }
@@ -253,29 +259,48 @@ impl std::fmt::Display for Action {
     }
 }
 
-pub trait Permutation {
-    fn next_permutation(&mut self) -> bool;
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub struct Step {
+    pub state: State,
+    pub action: Action,
+    pub prev_id: usize,
 }
 
-impl<T: Ord> Permutation for Vec<T> {
-    fn next_permutation(&mut self) -> bool {
-        let n = self.len();
-        let mut k = NOTHING;
-        let mut l = NOTHING;
-        for i in 1..n {
-            if self[i - 1] < self[i] {
-                k = i - 1;
-                l = i;
-            } else if k != NOTHING && self[k] < self[i] {
-                l = i;
-            }
+pub struct MaxHeapTopK<T> {
+    k: usize,
+    min_heap: MinHeap<T>,
+    rng: Random,
+}
+
+impl<T> MaxHeapTopK<T> {
+    pub fn new(k: usize) -> MaxHeapTopK<T> {
+        MaxHeapTopK {
+            k: k,
+            min_heap: MinHeap::with_capacity(k + 1),
+            rng: Random::new(),
         }
-        if k == NOTHING {
-            false
-        } else {
-            self.swap(k, l);
-            self[k + 1..n].reverse();
-            true
+    }
+
+    pub fn len(&self) -> usize {
+        self.min_heap.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.min_heap.data.clear()
+    }
+}
+impl<T: Ord + Clone> MaxHeapTopK<T> {
+    pub fn to_vec(&self) -> Vec<T> {
+        self.min_heap.data.clone()
+    }
+
+    pub fn push(&mut self, x: T) {
+        if self.len() < self.k {
+            self.min_heap.push(x);
+        } else if self.min_heap.data[0] < x && self.rng.usize(PUSH_RATE) == 0 {
+            self.min_heap.data.push(x);
+            self.min_heap.data.swap_remove(0);
+            MinHeap::sift_down(&mut self.min_heap.data, 0..self.k);
         }
     }
 }
@@ -397,6 +422,139 @@ impl U64Normalizer for ::std::ops::RangeFull {
     type Output = usize;
     fn normalize_u64(&self, x: u64) -> usize {
         x as usize
+    }
+}
+
+#[derive(Clone)]
+pub struct MinHeap<T> {
+    pub data: Vec<T>,
+}
+
+impl<T> MinHeap<T> {
+    pub fn new() -> MinHeap<T> {
+        MinHeap { data: Vec::new() }
+    }
+
+    pub fn with_capacity(n: usize) -> MinHeap<T> {
+        MinHeap { data: Vec::with_capacity(n) }
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+}
+
+impl<T: ::std::cmp::PartialOrd + Clone> MinHeap<T> {
+    pub fn from_vec(vec: &Vec<T>) -> MinHeap<T> {
+        let mut data: Vec<T> = vec.clone();
+        let n = data.len();
+        for i in (0..n / 2).rev() {
+            Self::sift_down(&mut data, i..n);
+        }
+        MinHeap { data: data }
+    }
+
+    pub fn to_vec(&self) -> Vec<T> {
+        let mut h = self.clone();
+        let mut res: Vec<T> = Vec::with_capacity(self.data.len());
+        while let Some(x) = h.pop() {
+            res.push(x);
+        }
+        res
+    }
+
+    pub fn peek(&self) -> Option<&T> {
+        self.data.get(0)
+    }
+
+    pub fn pop(&mut self) -> Option<T> {
+        if self.data.is_empty() {
+            None
+        } else {
+            let n = self.data.len();
+            let popped = self.data.swap_remove(0);
+            Self::sift_down(&mut self.data, 0..n - 1);
+            Some(popped)
+        }
+    }
+
+    pub fn push(&mut self, x: T) {
+        let n = self.data.len();
+        self.data.push(x);
+        Self::sift_up(&mut self.data, 0..n + 1);
+    }
+
+    pub fn append(&mut self, other: &mut Self) {
+        if self.len() < other.len() {
+            ::std::mem::swap(self, other);
+        }
+        while let Some(x) = other.pop() {
+            self.push(x);
+        }
+    }
+
+    pub fn sift_down(vec: &mut Vec<T>, range: ::std::ops::Range<usize>) {
+        let n = range.end;
+        let mut parent = range.start;
+        loop {
+            let l_child = (parent << 1) + 1;
+            let r_child = l_child + 1;
+            if l_child >= n {
+                break;
+            }
+
+            let mut cur = parent;
+            if vec[cur] > vec[l_child] {
+                cur = l_child;
+            }
+
+            if r_child < n && vec[cur] > vec[r_child] {
+                cur = r_child;
+            }
+
+            if cur == parent {
+                break;
+            } else {
+                vec.swap(parent, cur);
+                parent = cur;
+            }
+        }
+    }
+
+    fn sift_up(vec: &mut Vec<T>, range: ::std::ops::Range<usize>) {
+        let mut child = range.end - 1;
+        while child > range.start {
+            let parent = (child - 1) >> 1;
+            if range.start <= parent && vec[parent] > vec[child] {
+                vec.swap(parent, child);
+                child = parent;
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+pub struct Clock {
+    instant: ::std::time::Instant,
+}
+
+impl Clock {
+    pub fn new() -> Clock {
+        Clock { instant: ::std::time::Instant::now() }
+    }
+
+    pub fn elapsed(&self) -> u64 {
+        self.elapsed_as_msec()
+    }
+
+    pub fn elapsed_as_msec(&self) -> u64 {
+        let t = self.instant.elapsed();
+        t.as_secs() * 1000 + t.subsec_millis() as u64
     }
 }
 
