@@ -554,7 +554,7 @@ impl Clock {
 
     pub fn elapsed_as_msec(&self) -> u64 {
         let t = self.instant.elapsed();
-        t.as_secs() * 1000 + t.subsec_millis() as u64
+        t.as_secs() * 1000 + t.subsec_nanos() as u64 / 1_000_000
     }
 }
 
