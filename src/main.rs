@@ -16,8 +16,8 @@ macro_rules! debug{
     }
 }
 
-const BEAM_WIDTH: usize = 75;
-const PUSH_RATE: usize = 4;
+const BEAM_WIDTH: usize = 150;
+const PUSH_RATE: usize = 2;
 
 const N: usize = 100000;
 const S: usize = 10000;
@@ -136,8 +136,11 @@ impl ColoredPath {
 
     pub fn next_all_states(&self, state: State) -> Vec<(ScoredState, Action)> {
         let mut res = Vec::new();
+        let mut hand: Vec<(usize, &Color)> = state.hand.iter().enumerate().collect();
+        hand.sort_by(|x, y| x.1.cmp(y.1));
+        hand.dedup_by(|x, y| x.1.eq(y.1));
         for (target, &position) in state.position.iter().enumerate() {
-            for (hand_id, &color) in state.hand.iter().enumerate() {
+            for (hand_id, &color) in &hand {
                 let mut pos = position + self.next[position][color];
                 while state.occupied(pos) {
                     pos += self.next[pos][color];
@@ -145,7 +148,7 @@ impl ColoredPath {
                 let mut new_position = state.position.clone();
                 new_position[target] = pos;
                 let mut new_hand = state.hand.clone();
-                new_hand[hand_id] = self.bottle[state.time];
+                new_hand[*hand_id] = self.bottle[state.time];
                 let next = State {
                     time: state.time + 1,
                     position: new_position,
